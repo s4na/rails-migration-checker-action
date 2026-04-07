@@ -1,0 +1,214 @@
+name: Rails Migration Checker
+description: >
+  Verify that a pull request's db/schema.rb stays in sync with its migrations
+  by replaying schema:load + migrate on top of the base branch and diffing
+  the result.
+author: s4na
+
+branding:
+  icon: database
+  color: red
+
+inputs:
+  working-directory:
+    description: "Path to the Rails application root (e.g. '.', 'app/', 'backend/')."
+    required: false
+    default: "."
+  schema-path:
+    description: "Path to schema.rb, relative to working-directory."
+    required: false
+    default: "db/schema.rb"
+  migrations-path:
+    description: "Path to the migrations directory, relative to working-directory."
+    required: false
+    default: "db/migrate"
+  base-ref:
+    description: >
+      Branch to compare against. Defaults to the PR base branch when running on
+      pull_request, otherwise the repository default branch.
+    required: false
+    default: ""
+  ruby-version:
+    description: >
+      Ruby version to install via ruby/setup-ruby. Leave empty to skip Ruby
+      setup entirely (e.g. when the calling workflow already set Ruby up, or
+      when .ruby-version / Gemfile pin the version).
+    required: false
+    default: ""
+  bundler-cache:
+    description: "Whether ruby/setup-ruby should cache and run bundle install."
+    required: false
+    default: "true"
+  setup-command:
+    description: "Shell command to (re)create an empty database before schema:load."
+    required: false
+    default: "bin/rails db:drop db:create"
+  schema-load-command:
+    description: "Shell command to load schema.rb into the database."
+    required: false
+    default: "bin/rails db:schema:load"
+  migrate-command:
+    description: "Shell command to run pending migrations."
+    required: false
+    default: "bin/rails db:migrate"
+  schema-dump-command:
+    description: "Shell command to dump the current DB state back to schema.rb."
+    required: false
+    default: "bin/rails db:schema:dump"
+  comment-mode:
+    description: "How to comment on the PR when a diff is found: 'review' (line-level), 'issue' (single PR comment), or 'both'."
+    required: false
+    default: "review"
+  fail-on-diff:
+    description: "Fail the workflow when a diff is found. Set to 'false' to only post comments without failing."
+    required: false
+    default: "true"
+  skip-draft:
+    description: "Skip the check entirely when the PR is in draft state."
+    required: false
+    default: "true"
+  skip-title-pattern:
+    description: >
+      Regex (Ruby syntax). When the PR title matches, the check is skipped.
+      Useful for things like '\\[skip-schema\\]' or '^WIP:'.
+    required: false
+    default: ""
+  required-label:
+    description: >
+      If set, only run when the PR has this label. Empty means 'always run'.
+    required: false
+    default: ""
+  skip-label:
+    description: >
+      If set and the PR has this label, skip the check.
+    required: false
+    default: ""
+  github-token:
+    description: "GITHUB_TOKEN with pull-request: write permission, used to post comments."
+    required: true
+
+outputs:
+  diff-found:
+    description: "'true' when a diff between schema.rb and migrate-result was detected."
+    value: ${{ steps.check.outputs.diff_found }}
+  affected-tables:
+    description: "Comma-separated list of tables involved in the diff."
+    value: ${{ steps.check.outputs.tables }}
+
+runs:
+  using: composite
+  steps:
+    - name: Decide whether to run
+      id: gate
+      shell: bash
+      env:
+        EVENT_NAME: ${{ github.event_name }}
+        PR_TITLE: ${{ github.event.pull_request.title }}
+        PR_DRAFT: ${{ github.event.pull_request.draft }}
+        PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        SKIP_TITLE_PATTERN: ${{ inputs.skip-title-pattern }}
+        REQUIRED_LABEL: ${{ inputs.required-label }}
+        SKIP_LABEL: ${{ inputs.skip-label }}
+        SKIP_DRAFT: ${{ inputs.skip-draft }}
+      run: |
+        set -euo pipefail
+        decision=run
+        reason=""
+        if [ "$EVENT_NAME" != "pull_request" ] && [ "$EVENT_NAME" != "pull_request_target" ]; then
+          # On push / workflow_dispatch we always run; gating is PR-only.
+          echo "decision=run" >> "$GITHUB_OUTPUT"
+          echo "reason=non-pr-event" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        if [ "$SKIP_DRAFT" = "true" ] && [ "$PR_DRAFT" = "true" ]; then
+          decision=skip; reason="pr is draft"
+        fi
+        if [ "$decision" = "run" ] && [ -n "$SKIP_TITLE_PATTERN" ]; then
+          if ruby -e 'exit (ARGV[0] =~ Regexp.new(ARGV[1])) ? 0 : 1' "$PR_TITLE" "$SKIP_TITLE_PATTERN"; then
+            decision=skip; reason="title matched skip-title-pattern"
+          fi
+        fi
+        if [ "$decision" = "run" ] && [ -n "$REQUIRED_LABEL" ]; then
+          if ! echo "$PR_LABELS" | ruby -rjson -e 'exit JSON.parse(STDIN.read).include?(ARGV[0]) ? 0 : 1' "$REQUIRED_LABEL"; then
+            decision=skip; reason="missing required label '$REQUIRED_LABEL'"
+          fi
+        fi
+        if [ "$decision" = "run" ] && [ -n "$SKIP_LABEL" ]; then
+          if echo "$PR_LABELS" | ruby -rjson -e 'exit JSON.parse(STDIN.read).include?(ARGV[0]) ? 0 : 1' "$SKIP_LABEL"; then
+            decision=skip; reason="skip label '$SKIP_LABEL' present"
+          fi
+        fi
+        echo "decision=$decision" >> "$GITHUB_OUTPUT"
+        echo "reason=$reason" >> "$GITHUB_OUTPUT"
+        if [ "$decision" = "skip" ]; then
+          echo "::notice title=rails-migration-checker::skipped ($reason)"
+        fi
+
+    - name: Setup Ruby
+      if: steps.gate.outputs.decision == 'run' && inputs.ruby-version != ''
+      uses: ruby/setup-ruby@v1
+      with:
+        ruby-version: ${{ inputs.ruby-version }}
+        bundler-cache: ${{ inputs.bundler-cache == 'true' }}
+        working-directory: ${{ inputs.working-directory }}
+
+    - name: Resolve base ref
+      if: steps.gate.outputs.decision == 'run'
+      id: base
+      shell: bash
+      env:
+        INPUT_BASE_REF: ${{ inputs.base-ref }}
+        EVENT_BASE_REF: ${{ github.base_ref }}
+        DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      run: |
+        set -euo pipefail
+        ref="${INPUT_BASE_REF}"
+        if [ -z "$ref" ]; then ref="${EVENT_BASE_REF}"; fi
+        if [ -z "$ref" ]; then ref="${DEFAULT_BRANCH}"; fi
+        if [ -z "$ref" ]; then ref="main"; fi
+        echo "ref=$ref" >> "$GITHUB_OUTPUT"
+        # Make sure the base branch is fetched so `git show base:schema.rb` works.
+        git fetch --no-tags --depth=1 origin "$ref:refs/remotes/origin/$ref" || true
+        git fetch --no-tags origin "$ref" || true
+
+    - name: Run schema check
+      if: steps.gate.outputs.decision == 'run'
+      id: check
+      shell: bash
+      env:
+        WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        SCHEMA_PATH: ${{ inputs.schema-path }}
+        MIGRATIONS_PATH: ${{ inputs.migrations-path }}
+        BASE_REF: ${{ steps.base.outputs.ref }}
+        SETUP_COMMAND: ${{ inputs.setup-command }}
+        SCHEMA_LOAD_COMMAND: ${{ inputs.schema-load-command }}
+        MIGRATE_COMMAND: ${{ inputs.migrate-command }}
+        SCHEMA_DUMP_COMMAND: ${{ inputs.schema-dump-command }}
+      run: |
+        set +e
+        ruby "${{ github.action_path }}/scripts/run_check.rb"
+        echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+      continue-on-error: true
+
+    - name: Post PR comments
+      if: steps.gate.outputs.decision == 'run' && steps.check.outputs.diff_found == 'true' && github.event.pull_request.number != ''
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        COMMENT_MODE: ${{ inputs.comment-mode }}
+        DIFF_TEXT: ${{ steps.check.outputs.diff_text }}
+        TABLES: ${{ steps.check.outputs.tables }}
+        SUSPECTS: ${{ steps.check.outputs.suspects }}
+        BASE_REF: ${{ steps.base.outputs.ref }}
+      working-directory: ${{ inputs.working-directory }}
+      run: ruby "${{ github.action_path }}/scripts/post_comments.rb"
+
+    - name: Fail if diff
+      if: steps.gate.outputs.decision == 'run' && steps.check.outputs.diff_found == 'true' && inputs.fail-on-diff == 'true'
+      shell: bash
+      run: |
+        echo "::error title=rails-migration-checker::schema.rb is out of sync with migrations"
+        exit 1
