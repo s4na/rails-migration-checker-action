@@ -73,7 +73,14 @@ class IntegrationTest < Minitest::Test
 
   def dump_schema
     io = StringIO.new
-    ActiveRecord::SchemaDumper.dump(ActiveRecord::Base.connection, io)
+    # Rails 7.2+ expects a connection pool (with #with_connection); earlier
+    # versions expect a raw connection. Pick the right one at runtime.
+    target = if Gem::Version.new(ActiveRecord::VERSION::STRING) >= Gem::Version.new("7.2.0")
+               ActiveRecord::Base.connection_pool
+             else
+               ActiveRecord::Base.connection
+             end
+    ActiveRecord::SchemaDumper.dump(target, io)
     io.string
   end
 
