@@ -23,7 +23,9 @@ module SchemaDiff
 
   # Result value object returned by `diff`.
   Result = Struct.new(:empty, :text, :tables, keyword_init: true) do
-    def empty? = empty
+    def empty?
+      empty
+    end
   end
 
   # Compare two schema strings.

@@ -83,6 +83,13 @@ test/fixtures/schema_actual_diff.rb
 request.md / spec.md / README.md
 ```
 
+## 対応 Ruby / Rails
+
+- ライブラリ (`lib/schema_diff.rb`) は Ruby **2.7 以上**で動くようにする (endless method など 3.0+ 構文を使わない)。
+- CI は次のマトリクスで回す:
+  - ユニットテスト: Ruby 2.7 / 3.0 / 3.1 / 3.2 / 3.3
+  - 統合テスト (`test/integration_test.rb`): Ruby × Rails の組み合わせを `bundler/inline` で都度インストールし、ActiveRecord が生成する実 schema.rb 文字列に対して `SchemaDiff` を回す。組み合わせは Rails の Ruby 互換マトリクスに準拠 (Rails 6.1 / 7.0 / 7.1 / 7.2 / 8.0)。
+
 ## テスト方針
 - `lib/schema_diff.rb` を minitest で純粋ユニットテスト。
   - 同一 schema → `empty?` が true。
