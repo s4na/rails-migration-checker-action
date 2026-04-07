@@ -15,8 +15,20 @@ PR で動かすと、このアクションは次を行います。
 
 ## 使い方
 
+このアクションは GitHub Marketplace 形式で、他のリポジトリのワークフローから
+
 ```yaml
-# .github/workflows/migration-check.yml
+- uses: s4na/rails-migration-checker-action@v1
+  with:
+    github-token: ${{ secrets.GITHUB_TOKEN }}
+```
+
+の 1 ステップとして呼び出して使う想定です。タグは固定リリース (`@v1`、`@v1.2.3`) または特定コミット SHA を指定してください。
+
+### 最小構成 (sqlite3 アプリ)
+
+```yaml
+# .github/workflows/migration-check.yml （呼び出す側のリポジトリに置く）
 name: migration-check
 
 on:
@@ -25,6 +37,31 @@ on:
       - "db/migrate/**"
       - "db/schema.rb"
 
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  schema-sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # ベース ref を読むため必須
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: ".ruby-version"
+          bundler-cache: true
+
+      # ↓ ここが本アクション
+      - uses: s4na/rails-migration-checker-action@v1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+```
+
+### postgres を使うアプリ
+
+```yaml
 jobs:
   schema-sync:
     runs-on: ubuntu-latest
@@ -37,19 +74,37 @@ jobs:
         options: >-
           --health-cmd pg_isready --health-interval 10s
           --health-timeout 5s --health-retries 5
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/app_test
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0          # ベース ref を読むため必須
+        with: { fetch-depth: 0 }
       - uses: ruby/setup-ruby@v1
         with:
           ruby-version: ".ruby-version"
           bundler-cache: true
+
       - uses: s4na/rails-migration-checker-action@v1
         with:
           working-directory: .
+          base-ref: main
+          comment-mode: review
+          required-label: db-change      # このラベルが付いたときだけ走らせる例
           github-token: ${{ secrets.GITHUB_TOKEN }}
 ```
+
+### mono-repo (Rails アプリがサブディレクトリ)
+
+```yaml
+      - uses: s4na/rails-migration-checker-action@v1
+        with:
+          working-directory: backend       # ← Rails アプリの場所
+          schema-path: db/schema.rb        # working-directory 相対
+          migrations-path: db/migrate
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+```
+
+> Ruby / DB のセットアップ (ruby/setup-ruby、bundle install、サービスコンテナ) は呼び出し側ワークフローの責務です。本アクションは `bin/rails db:schema:load` などが叩ける状態になっている前提で動きます。
 
 ## 入力 (inputs)
 
