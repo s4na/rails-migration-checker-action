@@ -1,0 +1,65 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  unit:
+    name: unit (ruby ${{ matrix.ruby }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        ruby: ["2.7", "3.0", "3.1", "3.2", "3.3"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: ${{ matrix.ruby }}
+      - name: Run unit tests
+        run: ruby test/schema_diff_test.rb
+
+  integration:
+    name: integration (ruby ${{ matrix.ruby }} × rails ${{ matrix.rails }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Only enumerate Ruby × Rails pairs that the upstream gems actually
+        # support, per Rails' "Ruby on Rails / Ruby Compatibility" matrix.
+        include:
+          - { ruby: "2.7", rails: "6.1.7", sqlite3: "~> 1.4" }
+          - { ruby: "2.7", rails: "7.0.8", sqlite3: "~> 1.4" }
+          - { ruby: "3.0", rails: "7.0.8", sqlite3: "~> 1.4" }
+          - { ruby: "3.1", rails: "7.1.3", sqlite3: "~> 1.4" }
+          - { ruby: "3.2", rails: "7.1.3", sqlite3: "~> 1.4" }
+          - { ruby: "3.2", rails: "7.2.1", sqlite3: "~> 1.4" }
+          - { ruby: "3.3", rails: "7.2.1", sqlite3: "~> 1.4" }
+          - { ruby: "3.3", rails: "8.0.0", sqlite3: ">= 2.1" }
+    steps:
+      - uses: actions/checkout@v4
+      - name: Generate Gemfile for ${{ matrix.rails }}
+        env:
+          RAILS_VERSION: ${{ matrix.rails }}
+          SQLITE3_REQ: ${{ matrix.sqlite3 }}
+        run: |
+          cat > Gemfile <<EOF
+          source "https://rubygems.org"
+          gem "activerecord", "${RAILS_VERSION}"
+          gem "sqlite3", "${SQLITE3_REQ}"
+          gem "minitest", "~> 5.0"
+          # Stdlib-promoted gems that older Rails versions assume.
+          gem "logger"
+          gem "bigdecimal"
+          gem "mutex_m"
+          gem "drb"
+          gem "base64"
+          EOF
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: ${{ matrix.ruby }}
+          bundler-cache: true
+      - name: Run integration tests
+        run: bundle exec ruby test/integration_test.rb
