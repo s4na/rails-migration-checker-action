@@ -1,19 +1,19 @@
 # rails-migration-checker
 
-GitHub Action that catches the classic "I added a migration but forgot to update `db/schema.rb`" mistake (and the inverse: hand-edited `schema.rb` that no migration produces).
+「マイグレーションを追加したのに `db/schema.rb` を更新し忘れた」あるいは逆に「`schema.rb` を手で書き換えてしまったがそれを生むマイグレーションが無い」というよくあるミスを Pull Request 上で機械的に検知する GitHub Action です。
 
-## How it works
+## 仕組み
 
-On a pull request, the action:
+PR で動かすと、このアクションは次を行います。
 
-1. Replaces `db/schema.rb` with the version from the base branch and runs `db:schema:load`.
-2. Restores the PR branch's files and runs `db:migrate`.
-3. Dumps the resulting schema and compares it with the `schema.rb` committed on the PR branch.
-4. If there is a diff, it fails the job, posts a PR comment with the unified diff, and (in `review` mode) drops a line-level review comment on the migration file(s) most likely responsible.
+1. `db/schema.rb` をベースブランチ (main / master) のものに差し替え、`db:schema:load` で空 DB に流し込む。
+2. PR ブランチのファイルを戻し、`db:migrate` でマイグレーションを実行する。
+3. 適用後の DB を `db:schema:dump` で再ダンプし、PR ブランチにコミットされている `schema.rb` と比較する。
+4. 差分があればジョブを失敗させ、PR コメントとして diff を投稿する。`review` モードでは原因と推定されるマイグレーションファイルへ行単位レビューコメントを付ける。
 
-The base branch (`main` / `master`), comment style, and PR-level gating (labels, draft, title patterns) are all configurable so the action can drop into many different repositories without forking.
+ベースブランチ (`main` / `master`)、コメントの出し方、PR 単位のキック制御 (ラベル、draft、タイトルパターン) はすべて入力で切り替えられるので、フォーク無しで色々なリポジトリにそのまま入れられます。
 
-## Usage
+## 使い方
 
 ```yaml
 # .github/workflows/migration-check.yml
@@ -40,7 +40,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0          # required so the action can read base ref
+          fetch-depth: 0          # ベース ref を読むため必須
       - uses: ruby/setup-ruby@v1
         with:
           ruby-version: ".ruby-version"
@@ -51,38 +51,38 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 ```
 
-## Inputs
+## 入力 (inputs)
 
-| Name | Default | Description |
+| 名前 | デフォルト | 説明 |
 | --- | --- | --- |
-| `working-directory` | `.` | Rails app root (`.`, `app/`, `backend/`, ...). |
-| `schema-path` | `db/schema.rb` | Path to schema.rb relative to `working-directory`. |
-| `migrations-path` | `db/migrate` | Migrations directory. |
-| `base-ref` | _(auto)_ | Branch to compare against. Defaults to PR base, then repo default. |
-| `ruby-version` | _(empty)_ | If set, the action installs Ruby for you via `ruby/setup-ruby`. Leave empty to reuse the caller's setup. |
-| `bundler-cache` | `true` | Forwarded to `ruby/setup-ruby` when `ruby-version` is set. |
-| `setup-command` | `bin/rails db:drop db:create` | DB reset command. |
-| `schema-load-command` | `bin/rails db:schema:load` | Loads base `schema.rb`. |
-| `migrate-command` | `bin/rails db:migrate` | Runs migrations. |
-| `schema-dump-command` | `bin/rails db:schema:dump` | Dumps the resulting schema. |
-| `comment-mode` | `review` | `review` (line-level), `issue` (single PR comment), or `both`. |
-| `fail-on-diff` | `true` | Fail the job when a diff is found. |
-| `skip-draft` | `true` | Skip the check on draft PRs. |
-| `skip-title-pattern` | _(empty)_ | Ruby regex; if PR title matches, skip. |
-| `required-label` | _(empty)_ | Only run when this label is present on the PR. |
-| `skip-label` | _(empty)_ | Skip when this label is present on the PR. |
-| `github-token` | **required** | `GITHUB_TOKEN` with `pull-requests: write`. |
+| `working-directory` | `.` | Rails アプリのルート (`.`、`app/`、`backend/` など)。 |
+| `schema-path` | `db/schema.rb` | `working-directory` 相対の schema.rb パス。 |
+| `migrations-path` | `db/migrate` | マイグレーションディレクトリ。 |
+| `base-ref` | _(自動)_ | 比較対象ブランチ。デフォルトは PR ベース → リポジトリのデフォルトブランチ。 |
+| `ruby-version` | _(空)_ | 指定すると `ruby/setup-ruby` 経由で Ruby を入れる。空なら呼び出し側のセットアップを再利用。 |
+| `bundler-cache` | `true` | `ruby-version` を指定したときに `ruby/setup-ruby` に渡す。 |
+| `setup-command` | `bin/rails db:drop db:create` | DB を作り直すコマンド。 |
+| `schema-load-command` | `bin/rails db:schema:load` | ベース `schema.rb` を読み込むコマンド。 |
+| `migrate-command` | `bin/rails db:migrate` | マイグレーション実行コマンド。 |
+| `schema-dump-command` | `bin/rails db:schema:dump` | 結果のスキーマを再ダンプするコマンド。 |
+| `comment-mode` | `review` | `review` (行単位レビュー) / `issue` (PR 本文に 1 件) / `both`。 |
+| `fail-on-diff` | `true` | 差分があるときジョブを失敗させる。`false` にするとコメントだけ投稿。 |
+| `skip-draft` | `true` | draft PR をスキップする。 |
+| `skip-title-pattern` | _(空)_ | Ruby 正規表現。PR タイトルにマッチしたらスキップ。 |
+| `required-label` | _(空)_ | 指定すると、このラベルが付いている PR でだけ実行する。 |
+| `skip-label` | _(空)_ | 指定すると、このラベルが付いている PR ではスキップする。 |
+| `github-token` | **必須** | `pull-requests: write` 権限を持つ `GITHUB_TOKEN`。 |
 
-## Outputs
+## 出力 (outputs)
 
-| Name | Description |
+| 名前 | 説明 |
 | --- | --- |
-| `diff-found` | `'true'` when a diff was detected. |
-| `affected-tables` | Comma-separated list of tables involved in the diff. |
+| `diff-found` | 差分が検出されたとき `'true'`。 |
+| `affected-tables` | 差分に関わったテーブルのカンマ区切り一覧。 |
 
-## Permissions
+## 必要な権限
 
-The job needs:
+ジョブには次が必要です。
 
 ```yaml
 permissions:
@@ -90,14 +90,21 @@ permissions:
   pull-requests: write
 ```
 
-## Development
+## 対応バージョン
+
+CI で次のマトリクスを回しています。
+
+- ユニットテスト: Ruby 2.7 / 3.0 / 3.1 / 3.2 / 3.3
+- 統合テスト: Rails 6.1 / 7.0 / 7.1 / 7.2 / 8.0 を Ruby 互換マトリクスに従って組み合わせ
+
+## 開発
 
 ```sh
 ruby test/schema_diff_test.rb
 ```
 
-Design notes live in [`request.md`](./request.md) and [`spec.md`](./spec.md).
+設計メモは [`request.md`](./request.md) と [`spec.md`](./spec.md) にあります。
 
-## License
+## ライセンス
 
 MIT
