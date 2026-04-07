@@ -40,41 +40,64 @@ class Runner
     Dir.chdir(@workdir) do
       head_schema = File.read(@schema_path)
 
-      # 1. Replace schema.rb with the base ref version, then schema:load.
-      base_schema = capture!("git show #{shellquote(@base_ref)}:#{shellquote(@schema_path)}")
-      File.write(@schema_path, base_schema)
+      begin
+        # The schema/migration paths in inputs are relative to @workdir, but
+        # `git show` / `git diff` always speak in repo-root-relative paths.
+        # Compute the prefix from repo root to @workdir once and prepend it
+        # so we can talk to git from inside @workdir consistently.
+        repo_prefix = capture!("git rev-parse --show-prefix").strip
+        schema_repo_path = File.join(repo_prefix, @schema_path)
 
-      sh!(@setup_cmd)
-      sh!(@schema_load_cmd)
+        # 1. Replace schema.rb with the base ref version, then schema:load.
+        base_schema = capture!("git show #{shellquote(@base_ref)}:#{shellquote(schema_repo_path)}")
+        File.write(@schema_path, base_schema)
 
-      # 2. Restore the head schema, then run pending migrations against the
-      #    DB. After migrate finishes, dump the schema and compare.
-      File.write(@schema_path, head_schema)
-      sh!(@migrate_cmd)
-      sh!(@schema_dump_cmd)
+        sh!(@setup_cmd)
+        sh!(@schema_load_cmd)
 
-      actual_schema = File.read(@schema_path)
+        # 2. Restore the head schema, then run pending migrations against the
+        #    DB. After migrate finishes, dump the schema and compare.
+        File.write(@schema_path, head_schema)
+        sh!(@migrate_cmd)
+        sh!(@schema_dump_cmd)
 
-      # Make sure the working tree ends up with whatever was committed, even
-      # if a later step in the workflow inspects it.
-      File.write(@schema_path, head_schema)
+        actual_schema = File.read(@schema_path)
 
-      result = SchemaDiff.diff(head: head_schema, actual: actual_schema)
-      suspects = result.empty? ? [] : guess_suspects(result.tables)
+        result = SchemaDiff.diff(head: head_schema, actual: actual_schema)
+        suspects = result.empty? ? [] : guess_suspects(result.tables, repo_prefix)
 
-      emit_outputs(result, suspects)
-      write_summary(result, suspects)
+        emit_outputs(result, suspects)
+        write_summary(result, suspects)
 
-      exit(result.empty? ? 0 : 1)
+        exit(result.empty? ? 0 : 1)
+      ensure
+        # Make sure the working tree ends up with whatever was committed, even
+        # if a step above raised partway through.
+        File.write(@schema_path, head_schema) if head_schema
+      end
     end
   end
 
   private
 
-  def guess_suspects(tables)
+  def guess_suspects(tables, repo_prefix = "")
+    migrations_repo_path = File.join(repo_prefix, @migrations_path)
     changed = capture!(
-      "git diff --name-only #{shellquote("origin/#{@base_ref}")}...HEAD -- #{shellquote(@migrations_path)}"
+      "git diff --name-only #{shellquote("origin/#{@base_ref}")}...HEAD -- #{shellquote(migrations_repo_path)}"
     ).lines.map(&:strip).reject(&:empty?)
+
+    # `git diff --name-only` returns repo-root-relative paths. Convert them to
+    # @workdir-relative so File.read / downstream comment posting can resolve
+    # them when working-directory != ".".
+    prefix = repo_prefix.to_s
+    changed = changed.map do |path|
+      if !prefix.empty? && path.start_with?(prefix)
+        path[prefix.length..]
+      else
+        path
+      end
+    end
+
     return changed if tables.empty?
 
     changed.select do |path|

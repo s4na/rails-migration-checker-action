@@ -76,16 +76,19 @@ class CommentPoster
     end
 
     sha = `git rev-parse HEAD`.strip
+    any_failed = false
 
     @suspects.each do |path|
       line = locate_table_line(path) || 1
       body = "schema.rb と差分があります。" \
              "影響テーブル: #{@tables.join(', ')}。" \
              "このマイグレーションが原因の可能性が高いです。"
+      # `path` for the GitHub review-comments API must be repo-root-relative.
+      api_path = repo_relative(path)
       payload = {
         body: body,
         commit_id: sha,
-        path: path,
+        path: api_path,
         line: line,
         side: "RIGHT"
       }.to_json
@@ -99,12 +102,20 @@ class CommentPoster
           "--input", f.path
         )
         unless ok
-          warn "review comment for #{path} failed; falling back to issue comment"
-          post_issue_comment
-          return
+          warn "review comment for #{path} failed"
+          any_failed = true
         end
       end
     end
+
+    # If any line-level comment failed, post a single fallback issue comment
+    # so the PR author still sees the diff.
+    post_issue_comment if any_failed
+  end
+
+  def repo_relative(path)
+    @repo_prefix ||= `git rev-parse --show-prefix`.strip
+    @repo_prefix.empty? ? path : File.join(@repo_prefix, path)
   end
 
   def locate_table_line(path)

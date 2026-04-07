@@ -191,7 +191,7 @@ runs:
       continue-on-error: true
 
     - name: Post PR comments
-      if: steps.gate.outputs.decision == 'run' && steps.check.outputs.diff_found == 'true' && github.event.pull_request.number != ''
+      if: steps.gate.outputs.decision == 'run' && steps.check.outputs.diff_found == 'true' && github.event.pull_request != null
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.github-token }}
