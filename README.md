@@ -1,4 +1,4 @@
-# rails-migration-checker
+# rails-migration-checker-action
 
 「マイグレーションを追加したのに `db/schema.rb` を更新し忘れた」あるいは逆に「`schema.rb` を手で書き換えてしまったがそれを生むマイグレーションが無い」というよくあるミスを Pull Request 上で機械的に検知する GitHub Action です。
 
