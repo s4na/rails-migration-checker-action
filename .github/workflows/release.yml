@@ -1,54 +1,45 @@
 name: release
 
-# セマンティックな vX.Y.Z タグを push したときに走り、
-#   1. 同じ内容で GitHub Release を作成
-#   2. メジャー版エイリアス (v1, v2, ...) を最新の vX.Y.Z に貼り直す
-# ことで、利用側が `uses: s4na/rails-migration-checker-action@v1` の形で
-# 安定して参照できるようにする。
+# 完全自動リリース。流れ:
+#   1. main に conventional commit (feat:, fix: 等) が push されると
+#      release-please が「次のバージョンに上げる release PR」を作成/更新する。
+#   2. その release PR をマージすると release-please が
+#      vX.Y.Z タグ + GitHub Release を生成する。
+#   3. 同 job でメジャー版エイリアス (v1 等) を最新コミットに force-update
+#      するので、利用側は `uses: s4na/rails-migration-checker-action@v1`
+#      の固定参照だけで自動的に最新メジャーを追随できる。
 
 on:
   push:
-    tags:
-      - "v*.*.*"
+    branches: [main]
 
 permissions:
   contents: write
+  pull-requests: write
 
 jobs:
-  release:
+  release-please:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - id: release
+        uses: googleapis/release-please-action@v4
+        with:
+          release-type: simple
+          package-name: rails-migration-checker-action
+
+      - name: Checkout (only when a release was created)
+        if: ${{ steps.release.outputs.release_created == 'true' }}
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Compute major tag
-        id: major
-        run: |
-          full="${GITHUB_REF_NAME}"        # 例: v1.2.3
-          major="${full%%.*}"              # 例: v1
-          echo "tag=$full"   >> "$GITHUB_OUTPUT"
-          echo "major=$major" >> "$GITHUB_OUTPUT"
-
-      - name: Move major tag to current commit
+      - name: Move major tag
+        if: ${{ steps.release.outputs.release_created == 'true' }}
         env:
-          MAJOR: ${{ steps.major.outputs.major }}
+          TAG: ${{ steps.release.outputs.tag_name }}     # 例: v1.2.3
+          MAJOR: v${{ steps.release.outputs.major }}     # 例: v1
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -f "$MAJOR"
+          git tag -f "$MAJOR" "$TAG"
           git push origin "$MAJOR" --force
-
-      - name: Create GitHub Release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ steps.major.outputs.tag }}
-        run: |
-          # 既存リリースがあれば更新、無ければ新規作成（再実行可能にしておく）
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release edit "$TAG" --draft=false --prerelease=false
-          else
-            gh release create "$TAG" \
-              --title "$TAG" \
-              --generate-notes
-          fi
